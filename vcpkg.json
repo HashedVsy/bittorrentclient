@@ -1,0 +1,5 @@
+{
+  "name": "bittorrentclient",
+  "version-string": "0.1.0",
+  "dependencies": ["curl", "openssl"]
+}
