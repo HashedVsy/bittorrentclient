@@ -10,7 +10,6 @@
 #include <libtorrent/torrent_status.hpp>
 #include <libtorrent/error_code.hpp>
 #include <libtorrent/write_resume_data.hpp>
-#include <libtorrent/read_resume_data.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -52,16 +51,27 @@ void print_alerts(lt::session& ses) {
     }
 }
 
-void save_resume(lt::torrent_handle& h, const std::filesystem::path& directory) {
+bool save_resume_and_wait(lt::session& ses, lt::torrent_handle& h,
+                          const std::filesystem::path& directory) {
     h.save_resume_data(lt::torrent_handle::only_if_modified | lt::torrent_handle::save_info_dict);
-    for (int i = 0; i < 100; ++i) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::vector<lt::alert*> alerts;
+        ses.pop_alerts(&alerts);
+        for (lt::alert const* a : alerts) {
+            if (auto* rd = lt::alert_cast<lt::save_resume_data_alert>(a)) {
+                const auto data = lt::write_resume_data_buf(rd->params);
+                const auto file = directory / ".bittorrentclient.fastresume";
+                std::ofstream out(file, std::ios::binary | std::ios::trunc);
+                if (!out) return false;
+                out.write(data.data(), static_cast<std::streamsize>(data.size()));
+                return static_cast<bool>(out);
+            }
+            if (lt::alert_cast<lt::save_resume_data_failed_alert>(a)) return false;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        // Alerts are consumed by the normal loop. Resume data is intentionally
-        // requested asynchronously; the session will retain the state for the
-        // next process start even if the optional sidecar cannot be written.
-        (void)directory;
-        break;
     }
+    return false;
 }
 }
 
@@ -136,7 +146,6 @@ extern "C" int bt_engine_run(const char* input, const char* save_path) {
                       << " down=" << st.download_rate / 1000 << " kB/s"
                       << " up=" << st.upload_rate / 1000 << " kB/s"
                       << " peers=" << st.num_peers << '\n';
-
             if (st.is_seeding) {
                 done = true;
                 break;
@@ -145,7 +154,8 @@ extern "C" int bt_engine_run(const char* input, const char* save_path) {
         }
 
         if (stopping.load(std::memory_order_relaxed)) {
-            save_resume(h, destination);
+            if (!save_resume_and_wait(ses, h, destination))
+                std::cerr << "[RESUME] Could not save fast-resume data\n";
             h.pause();
             std::cout << "[ENGINE] Stopped cleanly\n";
             return 130;
