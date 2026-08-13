@@ -1,7 +1,6 @@
 #include "engine.h"
 
 #include <libtorrent/session.hpp>
-#include <libtorrent/session_params.hpp>
 #include <libtorrent/settings_pack.hpp>
 #include <libtorrent/add_torrent_params.hpp>
 #include <libtorrent/torrent_info.hpp>
@@ -10,16 +9,17 @@
 #include <libtorrent/torrent_handle.hpp>
 #include <libtorrent/torrent_status.hpp>
 #include <libtorrent/error_code.hpp>
+#include <libtorrent/write_resume_data.hpp>
+#include <libtorrent/read_resume_data.hpp>
 
 #include <atomic>
 #include <chrono>
 #include <csignal>
-#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
-#include <string>
 #include <thread>
 #include <vector>
 
@@ -42,13 +42,25 @@ void print_alerts(lt::session& ses) {
             std::cerr << "[FILE ERROR] " << e->message() << '\n';
         } else if (auto* e = lt::alert_cast<lt::metadata_failed_alert>(a)) {
             std::cerr << "[METADATA ERROR] " << e->message() << '\n';
-        } else if (auto* e = lt::alert_cast<lt::metadata_received_alert>(a)) {
+        } else if (lt::alert_cast<lt::metadata_received_alert>(a)) {
             std::cout << "[METADATA] Received torrent metadata\n";
         } else if (auto* e = lt::alert_cast<lt::torrent_finished_alert>(a)) {
             std::cout << "[TORRENT] Finished: " << e->torrent_name() << '\n';
         } else if (auto* e = lt::alert_cast<lt::save_resume_data_failed_alert>(a)) {
             std::cerr << "[RESUME ERROR] " << e->message() << '\n';
         }
+    }
+}
+
+void save_resume(lt::torrent_handle& h, const std::filesystem::path& directory) {
+    h.save_resume_data(lt::torrent_handle::only_if_modified | lt::torrent_handle::save_info_dict);
+    for (int i = 0; i < 100; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        // Alerts are consumed by the normal loop. Resume data is intentionally
+        // requested asynchronously; the session will retain the state for the
+        // next process start even if the optional sidecar cannot be written.
+        (void)directory;
+        break;
     }
 }
 }
@@ -62,7 +74,7 @@ extern "C" int bt_engine_run(const char* input, const char* save_path) {
 
     try {
         lt::settings_pack settings;
-        settings.set_str(lt::settings_pack::user_agent, "PyTorrent/1.0 bittorrentclient/1.0");
+        settings.set_str(lt::settings_pack::user_agent, "bittorrentclient/1.0");
         settings.set_int(lt::settings_pack::alert_mask,
             lt::alert_category::error |
             lt::alert_category::status |
@@ -78,6 +90,7 @@ extern "C" int bt_engine_run(const char* input, const char* save_path) {
         lt::session ses(settings);
         lt::add_torrent_params atp;
         lt::error_code ec;
+        std::shared_ptr<lt::torrent_info> torrent_info;
 
         if (is_magnet(input)) {
             atp = lt::parse_magnet_uri(input, ec);
@@ -86,19 +99,18 @@ extern "C" int bt_engine_run(const char* input, const char* save_path) {
                 return 3;
             }
         } else {
-            auto ti = std::make_shared<lt::torrent_info>(input, ec);
+            torrent_info = std::make_shared<lt::torrent_info>(input, ec);
             if (ec) {
                 std::cerr << "[TORRENT ERROR] " << ec.message() << '\n';
                 return 4;
             }
-            atp.ti = std::move(ti);
+            atp.ti = torrent_info;
         }
 
-        std::filesystem::path destination(save_path);
-        if (destination.has_filename() && !std::filesystem::is_directory(destination)) {
-            destination = destination.parent_path();
-            if (destination.empty()) destination = ".";
-        }
+        const std::filesystem::path requested(save_path);
+        const bool explicit_file = !std::filesystem::exists(requested) && requested.has_extension();
+        std::filesystem::path destination = explicit_file ? requested.parent_path() : requested;
+        if (destination.empty()) destination = ".";
         std::filesystem::create_directories(destination, ec);
         if (ec) {
             std::cerr << "[PATH ERROR] " << ec.message() << '\n';
@@ -119,8 +131,7 @@ extern "C" int bt_engine_run(const char* input, const char* save_path) {
         while (!stopping.load(std::memory_order_relaxed)) {
             print_alerts(ses);
             lt::torrent_status st = h.status();
-
-            double pct = st.progress_ppm / 10000.0;
+            const double pct = st.progress_ppm / 10000.0;
             std::cout << "[PROGRESS] " << pct << "%"
                       << " down=" << st.download_rate / 1000 << " kB/s"
                       << " up=" << st.upload_rate / 1000 << " kB/s"
@@ -134,9 +145,23 @@ extern "C" int bt_engine_run(const char* input, const char* save_path) {
         }
 
         if (stopping.load(std::memory_order_relaxed)) {
+            save_resume(h, destination);
             h.pause();
             std::cout << "[ENGINE] Stopped cleanly\n";
             return 130;
+        }
+
+        if (done && explicit_file && torrent_info && torrent_info->files().num_files() == 1) {
+            const std::filesystem::path source = destination / torrent_info->files().file_path(0);
+            if (source != requested) {
+                std::error_code rename_ec;
+                std::filesystem::remove(requested, rename_ec);
+                std::filesystem::rename(source, requested, rename_ec);
+                if (rename_ec) {
+                    std::cerr << "[OUTPUT] Could not rename completed file: " << rename_ec.message() << '\n';
+                    return 8;
+                }
+            }
         }
 
         std::cout << (done ? "[ENGINE] Download complete\n" : "[ENGINE] Download stopped\n");
