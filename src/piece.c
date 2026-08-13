@@ -1,0 +1,3 @@
+#include "piece.h"
+int piece_is_complete(const char*p,const Torrent*t,size_t i){FILE*f=fopen(p,"rb");if(!f)return 0;uint64_t o=i*(uint64_t)t->piece_length,z=torrent_piece_length(t,i);if(_fseeki64(f,o,SEEK_SET)){fclose(f);return 0;}unsigned char*d=malloc((size_t)z);int ok=d&&fread(d,1,(size_t)z,f)==z;fclose(f);if(ok)ok=torrent_verify_piece(t,i,d,(size_t)z);free(d);return ok;}
+int piece_write(const char*p,const Torrent*t,size_t i,const unsigned char*d,size_t n){FILE*f=fopen(p,"r+b");if(!f)return 0;if(_fseeki64(f,i*(uint64_t)t->piece_length,SEEK_SET)){fclose(f);return 0;}int ok=fwrite(d,1,n,f)==n;fclose(f);return ok;}
