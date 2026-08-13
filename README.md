@@ -40,6 +40,6 @@ cmake --build build --config Release
 
 The remaining work is mostly integration and production hardening rather than pretending every BEP is finished: complete IPv6 DHT (BEP 32), full LTEP/metadata/PEX integration (BEP 9/10/11), robust piece scheduling and choking, connection management, NAT traversal, torrent file trees, BitTorrent v2/hybrid torrents (BEP 52), encrypted transport, disk cache, rate limiting, tests, and fuzzing.
 
-The official BitTorrent BEP index distinguishes accepted extensions such as DHT, Fast Extension, metadata exchange, extension protocol, PEX, multitracker, LPD and UDP tracker, while newer capabilities such as IPv6 DHT and v2 are separate specifications. citeturn0search2turn0search6
+The official BitTorrent BEP index lists DHT, Fast Extension, metadata exchange, extension protocol, PEX, multitracker, LPD and UDP tracker as accepted extensions. IPv6 DHT and newer torrent formats are separate specifications.
 
-BitTorrent v2 replaces SHA-1 piece addressing with SHA-256 Merkle-tree based structures and can coexist with v1 in hybrid torrents, so it needs a dedicated implementation rather than a superficial flag. citeturn0search1
+BitTorrent v2 replaces SHA-1 piece addressing with SHA-256 Merkle-tree based structures and can coexist with v1 in hybrid torrents, so it needs a dedicated implementation rather than a superficial compatibility flag.
