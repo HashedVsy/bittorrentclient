@@ -1,0 +1,14 @@
+#include "udp_tracker.h"
+#include <openssl/rand.h>
+
+static uint64_t be64r(const unsigned char*p){uint64_t x=0;for(int i=0;i<8;i++)x=(x<<8)|p[i];return x;}
+static void be32w(unsigned char*p,uint32_t x){p[0]=x>>24;p[1]=x>>16;p[2]=x>>8;p[3]=x;}
+static uint32_t be32r(const unsigned char*p){return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];}
+static int parse_url(const char*u,char*host,size_t hc,uint16_t*port){const char*p=strstr(u,"://");if(!p||strncmp(u,"udp",3)!=0)return 0;p+=3;const char*s=strchr(p,'/');size_t n=s?(size_t)(s-p):strlen(p);if(n>=hc)return 0;memcpy(host,p,n);host[n]=0;char*c=strrchr(host,':');*port=80;if(c){*c=0;long v=strtol(c+1,NULL,10);if(v<1||v>65535)return 0;*port=(uint16_t)v;}return 1;}
+int udp_tracker_announce(const char*url,const unsigned char ih[20],const unsigned char pid[20],uint16_t port,uint32_t dl,uint32_t left,uint32_t up,PeerAddress*peers,size_t cap,size_t*count){
+    *count=0;char host[256];uint16_t tp;if(!parse_url(url,host,sizeof(host),&tp))return 0;struct addrinfo hints={0},*res=NULL;hints.ai_socktype=SOCK_DGRAM;hints.ai_family=AF_INET;char ps[8];_snprintf_s(ps,sizeof(ps),_TRUNCATE,"%u",tp);if(getaddrinfo(host,ps,&hints,&res)!=0)return 0;
+    SOCKET s=socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);if(s==INVALID_SOCKET){freeaddrinfo(res);return 0;}DWORD to=3000;setsockopt(s,SOL_SOCKET,SO_RCVTIMEO,(char*)&to,sizeof(to));
+    unsigned char q[16]={0};uint64_t proto=0x41727101980ULL;for(int i=0;i<8;i++)q[i]=(unsigned char)(proto>>(56-8*i));uint32_t action=0,tx=0;RAND_bytes((unsigned char*)&tx,4);be32w(q+8,action);be32w(q+12,tx);if(sendto(s,(char*)q,16,0,res->ai_addr,(int)res->ai_addrlen)!=16){closesocket(s);freeaddrinfo(res);return 0;}
+    unsigned char r[2048];int n=recvfrom(s,(char*)r,sizeof(r),0,NULL,NULL);if(n<16||be32r(r)!=0||be32r(r+4)!=tx){closesocket(s);freeaddrinfo(res);return 0;}uint64_t conn=be64r(r+8);unsigned char a[98];be64w:
+    ;
+    unsigned char req[98];memset(req,0,sizeof(req));for(int i=0;i<8;i++)req[i]=(unsigned char)(conn>>(56-8*i));be32w(req+8,1);RAND_bytes(req+12,4);memcpy(req+16,ih,20);memcpy(req+36,pid,20);uint64_t z=dl;for(int i=0;i<8;i++)req[56+i]=(unsigned char)(z>>(56-8*i));z=left;for(int i=0;i<8;i++)req[64+i]=(unsigned char)(z>>(56-8*i));z=up;for(int i=0;i<8;i++)req[72+i]=(unsigned char)(z>>(56-8*i));be32w(req+80,0);be32w(req+84,0);be32w(req+88,0xffffffffu);be32w(req+92,port);uint32_t tx2=be32r(req+12);if(sendto(s,(char*)req,98,0,res->ai_addr,(int)res->ai_addrlen)!=98){closesocket(s);freeaddrinfo(res);return 0;}n=recvfrom(s,(char*)r,sizeof(r),0,NULL,NULL);closesocket(s);freeaddrinfo(res);if(n<20||be32r(r)!=1||be32r(r+4)!=tx2)return 0;for(int off=20;off+6<=n&&*count<cap;off+=6){struct in_addr ip;memcpy(&ip,r+off,4);InetNtopA(AF_INET,&ip,peers[*count].ip,sizeof(peers[*count].ip));peers[*count].port=(uint16_t)(((uint16_t)r[off+4]<<8)|r[off+5]);(*count)++;}return 1;}
