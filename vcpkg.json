@@ -1,6 +1,11 @@
 {
   "name": "bittorrentclient",
-  "version-string": "0.3.0",
-  "description": "Native Windows BitTorrent client written in C17",
-  "dependencies": ["curl", "openssl"]
+  "version-string": "1.0.0-dev",
+  "description": "Production-oriented Windows BitTorrent client",
+  "dependencies": [
+    {
+      "name": "libtorrent",
+      "features": ["dht", "encryption"]
+    }
+  ]
 }
