@@ -2,10 +2,5 @@
   "name": "bittorrentclient",
   "version-string": "1.0.0-dev",
   "description": "Production-oriented Windows BitTorrent client",
-  "dependencies": [
-    {
-      "name": "libtorrent",
-      "features": ["dht", "encryption"]
-    }
-  ]
+  "dependencies": ["libtorrent"]
 }
